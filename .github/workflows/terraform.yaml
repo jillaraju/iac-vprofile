@@ -14,9 +14,9 @@ on:
       - terraform/**
 
 env:
-  BUCKET_TF_STATE: ${{ secrets.BUCKET_TF_STATE }}
   AWS_REGION: us-east-1
   EKS_CLUSTER: vprofile-eks
+  BUCKET_TF_STATE: ${{ secrets.BUCKET_TF_STATE }}
 
 jobs:
   terraform:
@@ -29,45 +29,54 @@ jobs:
         working-directory: ./terraform
 
     steps:
+      # 1️⃣ Checkout repo
       - name: Checkout source code
         uses: actions/checkout@v4
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v2
-        with:
-          terraform_version: 1.6.3
-
-      - name: Terraform init
-        run: terraform init -backend-config="bucket=${{ env.BUCKET_TF_STATE }}"
-
-      - name: Terraform format
-        run: terraform fmt -check
-
-      - name: Terraform validate
-        run: terraform validate
-
-      - name: Terraform plan
-        id: plan
-        run: terraform plan -no-color -input=false -out planfile
-        continue-on-error: true
-
-      - name: Terraform plan status
-        if: steps.plan.outcome == 'failure'
-        run: exit 1
-
-      - name: Terraform apply
-        id: apply
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        run: terraform apply -auto-approve -input=false planfile
-
+      # 2️⃣ Configure AWS credentials (MUST be before terraform init)
       - name: Configure AWS credentials
-        if: steps.apply.outcome == 'success'
         uses: aws-actions/configure-aws-credentials@v1
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
+      # 3️⃣ Setup Terraform
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.6.3
+
+      # 4️⃣ Terraform init (S3 backend needs creds)
+      - name: Terraform init
+        run: terraform init -backend-config="bucket=${{ env.BUCKET_TF_STATE }}"
+
+      # 5️⃣ Terraform format
+      - name: Terraform format
+        run: terraform fmt -check
+
+      # 6️⃣ Terraform validate
+      - name: Terraform validate
+        run: terraform validate
+
+      # 7️⃣ Terraform plan
+      - name: Terraform plan
+        id: plan
+        run: terraform plan -no-color -input=false -out planfile
+        continue-on-error: true
+
+      # 8️⃣ Fail if plan failed
+      - name: Terraform plan status
+        if: steps.plan.outcome == 'failure'
+        run: exit 1
+
+      # 9️⃣ Terraform apply (ONLY main branch push)
+      - name: Terraform apply
+        id: apply
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: terraform apply -auto-approve -input=false planfile
+
+      # 🔟 Update kubeconfig
       - name: Update kubeconfig
         if: steps.apply.outcome == 'success'
         run: |
@@ -75,6 +84,7 @@ jobs:
             --region ${{ env.AWS_REGION }} \
             --name ${{ env.EKS_CLUSTER }}
 
+      # 1️⃣1️⃣ Install NGINX Ingress Controller
       - name: Install Ingress controller
         if: steps.apply.outcome == 'success'
         run: |
